@@ -1,0 +1,6 @@
+project_id = "curriculum-learning"
+
+[functions.curriculum-data]
+# The browser has no Supabase login. The function is public but strictly validates
+# requests and is the only component that receives the server-side service role.
+verify_jwt = false

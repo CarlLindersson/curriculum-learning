@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Participant data and generated results
+data/
+results/
+
+# docs (not needed for the browser game)
+docs/
+
+# tests (not needed for the browser game)
+tests/
+
+# Pygbag build products
+scripts/build/
+*-pygbag.*
+
+# Supabase local state and secrets
+supabase/.temp/
+supabase/.branches/
+supabase/functions/.env
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Editor and operating-system files
+.vscode/
+.DS_Store
+Thumbs.db
