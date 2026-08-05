@@ -119,6 +119,29 @@ class CurriculumConfig:
                 raise ValueError(f"{field_name} must be greater than zero")
 
 
+@dataclass(frozen=True)
+class PrivacyNotice:
+    """Public controller details shown before the browser creates a session."""
+
+    controller_name: str
+    contact_email: str
+    retention_period: str
+    version: str
+
+    def __post_init__(self) -> None:
+        values = {
+            "controller_name": self.controller_name,
+            "contact_email": self.contact_email,
+            "retention_period": self.retention_period,
+            "version": self.version,
+        }
+        for field_name, value in values.items():
+            if not value.strip() or value.startswith("__"):
+                raise ValueError(f"{field_name} must be configured for the web build")
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", self.contact_email):
+            raise ValueError("contact_email must be a valid email address")
+
+
 def _normalise_curriculum_mode(value: str) -> CurriculumMode:
     normalised = re.sub(r"[\s-]+", "_", value.strip().lower())
     # Accept the spelling used in the original design brief as an input alias.
@@ -392,6 +415,10 @@ class SessionRecorder:
         return True
 
     @property
+    def is_ready(self) -> bool:
+        return True
+
+    @property
     def sync_error(self) -> str:
         return ""
 
@@ -529,15 +556,21 @@ def _size_name(state: SymbolState) -> str:
     return "large" if state.is_large else "small"
 
 
+def _display_alias(alias: str) -> str:
+    return " ".join(part.capitalize() for part in alias.split("-"))
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
 class Screen(str, Enum):
+    PRIVACY = "privacy"
     SUBJECT_ID = "subject_id"
     INSTRUCTIONS = "instructions"
     PLAYING = "playing"
     COMPLETE = "complete"
+    DECLINED = "declined"
 
 
 class TrialPhase(str, Enum):
@@ -572,6 +605,17 @@ class CurriculumGame:
     START_POS = (210, 350)
     OPERATION_POS = (540, 350)
     OPTION_POSITIONS = ((860, 245), (860, 465))
+    ALIAS_BUTTON_RECTS = (
+        (250, 260, 600, 70),
+        (250, 355, 600, 70),
+        (250, 450, 600, 70),
+    )
+    PRIVACY_AGE_RECT = (105, 514, 28, 28)
+    PRIVACY_PARTICIPATION_RECT = (105, 558, 28, 28)
+    PRIVACY_AGE_HIT_RECT = (95, 506, 620, 42)
+    PRIVACY_PARTICIPATION_HIT_RECT = (95, 550, 650, 42)
+    PRIVACY_LEAVE_RECT = (160, 620, 240, 56)
+    PRIVACY_ACCEPT_RECT = (670, 620, 270, 56)
 
     def __init__(
         self,
@@ -580,6 +624,10 @@ class CurriculumGame:
         seed: int | None = None,
         data_dir: Path | None = None,
         recorder_factory: Callable[[str, CurriculumMode, Path | None], Any] | None = None,
+        anonymous_participant_id: str | None = None,
+        new_anonymous_participant: Callable[[], str] | None = None,
+        privacy_notice: PrivacyNotice | None = None,
+        require_privacy_acceptance: bool = False,
     ) -> None:
         self.config = (
             curriculum
@@ -589,9 +637,25 @@ class CurriculumGame:
         self.rng = random.Random(seed)
         self.data_dir = data_dir
         self.recorder_factory = recorder_factory
-        self.screen = Screen.SUBJECT_ID
-        self.subject_id = ""
+        self.anonymous_participant_id = anonymous_participant_id
+        self.new_anonymous_participant = new_anonymous_participant
+        self.privacy_notice = privacy_notice
+        self.require_privacy_acceptance = require_privacy_acceptance
+        if self.require_privacy_acceptance and self.privacy_notice is None:
+            raise ValueError("privacy_notice is required when acceptance is required")
+        if anonymous_participant_id is not None and not re.fullmatch(
+            r"[A-Za-z0-9_.-]{1,40}", anonymous_participant_id
+        ):
+            raise ValueError("anonymous_participant_id has an invalid format")
+        self.screen = (
+            Screen.PRIVACY if self.require_privacy_acceptance else Screen.SUBJECT_ID
+        )
+        self.subject_id = anonymous_participant_id or ""
+        self.leaderboard_name = ""
         self.input_error = ""
+        self.privacy_age_confirmed = False
+        self.privacy_participation_confirmed = False
+        self.privacy_accepted = False
         self.scheduler = CurriculumScheduler(self.config, self.rng)
         self.recorder: Any | None = None
         self.trial: Trial | None = None
@@ -605,6 +669,11 @@ class CurriculumGame:
         self.timed_out = False
         self.ranking: int | None = None
         self._summary_saved = False
+        if self.anonymous_participant_id is not None:
+            if self.recorder_factory is None:
+                raise ValueError("anonymous browser mode requires a recorder_factory")
+            if not self.require_privacy_acceptance:
+                self._create_anonymous_recorder()
 
     def run(self) -> None:
         """Run the desktop version while retaining an async-capable core."""
@@ -628,6 +697,7 @@ class CurriculumGame:
             "heading": pygame.font.Font(None, 40),
             "body": pygame.font.Font(None, 30),
             "small": pygame.font.Font(None, 23),
+            "notice": pygame.font.Font(None, 20),
             "feedback": pygame.font.Font(None, 78),
         }
         running = True
@@ -658,17 +728,73 @@ class CurriculumGame:
         remote_ranking = getattr(self.recorder, "ranking", None)
         if remote_ranking is not None:
             self.ranking = remote_ranking
+        remote_name = getattr(self.recorder, "leaderboard_name", None)
+        if remote_name and self.anonymous_participant_id is not None:
+            self.leaderboard_name = remote_name
+            ready = bool(getattr(self.recorder, "is_ready", False))
+            if self.screen is Screen.SUBJECT_ID and ready:
+                self.input_error = ""
+                self.screen = Screen.INSTRUCTIONS
 
     def _handle_event(self, event: Any, now: int, pygame: Any) -> None:
-        if self.screen is Screen.SUBJECT_ID and event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_RETURN:
-                self._accept_subject_id()
-            elif event.key == pygame.K_BACKSPACE:
-                self.subject_id = self.subject_id[:-1]
-                self.input_error = ""
-            elif event.unicode and event.unicode.isprintable() and len(self.subject_id) < 40:
-                self.subject_id += event.unicode
-                self.input_error = ""
+        if self.screen is Screen.PRIVACY:
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_1:
+                    self.privacy_age_confirmed = not self.privacy_age_confirmed
+                    self.input_error = ""
+                elif event.key == pygame.K_2:
+                    self.privacy_participation_confirmed = (
+                        not self.privacy_participation_confirmed
+                    )
+                    self.input_error = ""
+                elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    self._accept_privacy_notice()
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if pygame.Rect(*self.PRIVACY_AGE_HIT_RECT).collidepoint(event.pos):
+                    self.privacy_age_confirmed = not self.privacy_age_confirmed
+                    self.input_error = ""
+                elif pygame.Rect(*self.PRIVACY_PARTICIPATION_HIT_RECT).collidepoint(
+                    event.pos
+                ):
+                    self.privacy_participation_confirmed = (
+                        not self.privacy_participation_confirmed
+                    )
+                    self.input_error = ""
+                elif pygame.Rect(*self.PRIVACY_ACCEPT_RECT).collidepoint(event.pos):
+                    self._accept_privacy_notice()
+                elif pygame.Rect(*self.PRIVACY_LEAVE_RECT).collidepoint(event.pos):
+                    self.input_error = ""
+                    self.screen = Screen.DECLINED
+            return
+
+        if self.screen is Screen.DECLINED:
+            return
+
+        if self.screen is Screen.SUBJECT_ID:
+            if self.anonymous_participant_id is not None:
+                if event.type == pygame.KEYDOWN:
+                    number_keys = {
+                        pygame.K_1: 0,
+                        pygame.K_2: 1,
+                        pygame.K_3: 2,
+                    }
+                    if event.key in number_keys:
+                        self._choose_alias(number_keys[event.key])
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    for index, dimensions in enumerate(self.ALIAS_BUTTON_RECTS):
+                        if pygame.Rect(*dimensions).collidepoint(event.pos):
+                            self._choose_alias(index)
+                            break
+                return
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_RETURN:
+                    self._accept_subject_id()
+                elif event.key == pygame.K_BACKSPACE:
+                    self.subject_id = self.subject_id[:-1]
+                    self.input_error = ""
+                elif event.unicode and event.unicode.isprintable() and len(self.subject_id) < 40:
+                    self.subject_id += event.unicode
+                    self.input_error = ""
             return
 
         if self.screen is Screen.INSTRUCTIONS and event.type == pygame.KEYDOWN:
@@ -695,6 +821,27 @@ class CurriculumGame:
                     self._submit_response(option, now, response_type="mouse")
                     break
 
+    def _create_anonymous_recorder(self) -> None:
+        if self.recorder is not None:
+            return
+        if self.anonymous_participant_id is None or self.recorder_factory is None:
+            raise ValueError("anonymous browser mode is not configured")
+        self.recorder = self.recorder_factory(
+            self.anonymous_participant_id, self.config.mode, self.data_dir
+        )
+
+    def _accept_privacy_notice(self) -> None:
+        if not (
+            self.privacy_age_confirmed and self.privacy_participation_confirmed
+        ):
+            self.input_error = "Please confirm both statements before continuing."
+            return
+        self.privacy_accepted = True
+        self.input_error = ""
+        if self.anonymous_participant_id is not None:
+            self._create_anonymous_recorder()
+        self.screen = Screen.SUBJECT_ID
+
     def _accept_subject_id(self) -> None:
         cleaned = self.subject_id.strip()
         if not cleaned:
@@ -710,7 +857,22 @@ class CurriculumGame:
             self.recorder = self.recorder_factory(cleaned, self.config.mode, self.data_dir)
         self.screen = Screen.INSTRUCTIONS
 
+    def _choose_alias(self, index: int) -> None:
+        if self.recorder is None:
+            return
+        options = getattr(self.recorder, "alias_options", [])
+        if not 0 <= index < len(options):
+            return
+        try:
+            self.recorder.choose_alias(options[index])
+            self.input_error = ""
+        except ValueError as exc:
+            self.input_error = str(exc)
+
     def _begin_game(self, now: int) -> None:
+        if self.recorder is not None and not getattr(self.recorder, "is_ready", True):
+            self.input_error = "Please wait while your session is prepared."
+            return
         self.screen = Screen.PLAYING
         self._start_trial(now)
 
@@ -806,9 +968,23 @@ class CurriculumGame:
         self.screen = Screen.COMPLETE
 
     def _reset(self) -> None:
-        self.screen = Screen.SUBJECT_ID
-        self.subject_id = ""
+        if (
+            self.anonymous_participant_id is not None
+            and self.new_anonymous_participant is not None
+        ):
+            participant_id = self.new_anonymous_participant()
+            if not re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", participant_id):
+                raise ValueError("The new anonymous participant code has an invalid format")
+            self.anonymous_participant_id = participant_id
+        self.screen = (
+            Screen.PRIVACY if self.require_privacy_acceptance else Screen.SUBJECT_ID
+        )
+        self.subject_id = self.anonymous_participant_id or ""
+        self.leaderboard_name = ""
         self.input_error = ""
+        self.privacy_age_confirmed = False
+        self.privacy_participation_confirmed = False
+        self.privacy_accepted = False
         self.scheduler = CurriculumScheduler(self.config, self.rng)
         self.recorder = None
         self.trial = None
@@ -818,19 +994,228 @@ class CurriculumGame:
         self.ranking = None
         self.timed_out = False
         self._summary_saved = False
+        if (
+            self.anonymous_participant_id is not None
+            and self.recorder_factory is not None
+            and not self.require_privacy_acceptance
+        ):
+            self._create_anonymous_recorder()
 
     def _draw(self, surface: Any, fonts: Mapping[str, Any], now: int, pygame: Any) -> None:
         surface.fill(self.BACKGROUND)
-        if self.screen is Screen.SUBJECT_ID:
+        if self.screen is Screen.PRIVACY:
+            self._draw_privacy_screen(surface, fonts, pygame)
+        elif self.screen is Screen.SUBJECT_ID:
             self._draw_subject_screen(surface, fonts, pygame)
         elif self.screen is Screen.INSTRUCTIONS:
             self._draw_instruction_screen(surface, fonts, pygame)
         elif self.screen is Screen.PLAYING:
             self._draw_trial_screen(surface, fonts, now, pygame)
-        else:
+        elif self.screen is Screen.COMPLETE:
             self._draw_complete_screen(surface, fonts, pygame)
+        else:
+            self._draw_declined_screen(surface, fonts, pygame)
+
+    def _draw_privacy_screen(
+        self, surface: Any, fonts: Mapping[str, Any], pygame: Any
+    ) -> None:
+        assert self.privacy_notice is not None
+        notice = self.privacy_notice
+        notice_font = fonts.get("notice", fonts["small"])
+        _centred_text(
+            surface,
+            fonts["heading"],
+            "Participant information and privacy notice",
+            self.TEXT,
+            48,
+        )
+        panel = pygame.Rect(60, 78, 980, 418)
+        pygame.draw.rect(surface, self.PANEL, panel, border_radius=18)
+        pygame.draw.rect(surface, self.BORDER, panel, width=2, border_radius=18)
+
+        left_x, right_x = 92, 566
+        _text(surface, fonts["body"], "About this pilot", self.TEXT, (left_x, 102))
+        _draw_wrapped_text(
+            surface,
+            notice_font,
+            (
+                "This private pilot evaluates whether a curriculum-learning game "
+                "is understandable and appropriately difficult. Taking part is voluntary."
+            ),
+            self.MUTED,
+            (left_x, 140),
+            420,
+            22,
+        )
+        _text(surface, fonts["body"], "What is recorded", self.TEXT, (left_x, 224))
+        _draw_wrapped_text(
+            surface,
+            notice_font,
+            (
+                "A newly generated participant/session code and alias; task condition; "
+                "choices, correctness, response times, timeouts, scores and timestamps. "
+                "We do not ask for your real name, email address or date of birth."
+            ),
+            self.MUTED,
+            (left_x, 262),
+            420,
+            22,
+        )
+        _text(surface, fonts["body"], "How it is used", self.TEXT, (left_x, 384))
+        _draw_wrapped_text(
+            surface,
+            notice_font,
+            (
+                "The data is used only to assess and improve the task. Your generated "
+                "alias and score are used to calculate and display your game ranking."
+            ),
+            self.MUTED,
+            (left_x, 422),
+            420,
+            22,
+        )
+
+        _text(surface, fonts["body"], "Legal basis and services", self.TEXT, (right_x, 102))
+        _draw_wrapped_text(
+            surface,
+            notice_font,
+            (
+                "The lawful basis is the controller's legitimate interests in evaluating "
+                "this low-risk task. GitHub Pages hosts the game and Supabase processes "
+                "and stores the study data. They may process limited request logs, such "
+                "as IP address and browser details, and may process data outside the UK "
+                "under contractual safeguards. Data is not sold or used for marketing."
+            ),
+            self.MUTED,
+            (right_x, 140),
+            438,
+            22,
+        )
+        _text(surface, fonts["body"], "Retention and your rights", self.TEXT, (right_x, 292))
+        _draw_wrapped_text(
+            surface,
+            notice_font,
+            (
+                f"Study records are retained {notice.retention_period}. You may stop at "
+                "any time. Already saved records remain unless you request deletion. "
+                "To request access, deletion or object to processing, contact "
+                f"{notice.controller_name} at {notice.contact_email} and quote your "
+                "generated alias. You may also complain to the UK Information "
+                "Commissioner's Office (ico.org.uk)."
+            ),
+            self.MUTED,
+            (right_x, 330),
+            438,
+            22,
+        )
+
+        self._draw_checkbox(
+            surface,
+            fonts,
+            pygame,
+            self.PRIVACY_AGE_RECT,
+            self.privacy_age_confirmed,
+            "1. I confirm that I am aged 20 or over.",
+        )
+        self._draw_checkbox(
+            surface,
+            fonts,
+            pygame,
+            self.PRIVACY_PARTICIPATION_RECT,
+            self.privacy_participation_confirmed,
+            "2. I have read this notice and voluntarily agree to take part.",
+        )
+
+        leave_button = pygame.Rect(*self.PRIVACY_LEAVE_RECT)
+        pygame.draw.rect(surface, self.PANEL, leave_button, border_radius=12)
+        pygame.draw.rect(surface, self.BORDER, leave_button, width=2, border_radius=12)
+        _text(
+            surface,
+            fonts["body"],
+            "Leave pilot",
+            self.TEXT,
+            leave_button.center,
+            anchor="center",
+        )
+
+        accepted = self.privacy_age_confirmed and self.privacy_participation_confirmed
+        accept_button = pygame.Rect(*self.PRIVACY_ACCEPT_RECT)
+        accept_colour = self.START_BLUE if accepted else self.BORDER
+        pygame.draw.rect(surface, accept_colour, accept_button, border_radius=12)
+        _text(
+            surface,
+            fonts["body"],
+            "Accept and continue",
+            self.TEXT if accepted else self.MUTED,
+            accept_button.center,
+            anchor="center",
+        )
+        if self.input_error:
+            _centred_text(surface, fonts["small"], self.input_error, self.ERROR, 604)
+        _text(
+            surface,
+            fonts["small"],
+            f"Notice version {notice.version}",
+            self.MUTED,
+            (1025, 486),
+            anchor="bottomright",
+        )
+
+    def _draw_checkbox(
+        self,
+        surface: Any,
+        fonts: Mapping[str, Any],
+        pygame: Any,
+        dimensions: tuple[int, int, int, int],
+        checked: bool,
+        label: str,
+    ) -> None:
+        box = pygame.Rect(*dimensions)
+        pygame.draw.rect(surface, self.PANEL, box, border_radius=4)
+        pygame.draw.rect(
+            surface,
+            self.START_BLUE if checked else self.BORDER,
+            box,
+            width=3,
+            border_radius=4,
+        )
+        if checked:
+            pygame.draw.line(
+                surface,
+                self.TEXT,
+                (box.left + 6, box.centery),
+                (box.left + 12, box.bottom - 7),
+                width=3,
+            )
+            pygame.draw.line(
+                surface,
+                self.TEXT,
+                (box.left + 12, box.bottom - 7),
+                (box.right - 5, box.top + 6),
+                width=3,
+            )
+        _text(surface, fonts["small"], label, self.TEXT, (box.right + 12, box.centery), anchor="midleft")
+
+    def _draw_declined_screen(
+        self, surface: Any, fonts: Mapping[str, Any], pygame: Any
+    ) -> None:
+        panel = pygame.Rect(220, 190, 660, 300)
+        pygame.draw.rect(surface, self.PANEL, panel, border_radius=20)
+        pygame.draw.rect(surface, self.BORDER, panel, width=2, border_radius=20)
+        _centred_text(surface, fonts["title"], "You have not joined the pilot", self.TEXT, 270)
+        _centred_text(
+            surface,
+            fonts["body"],
+            "No task session was created and no task responses were sent.",
+            self.MUTED,
+            360,
+        )
+        _centred_text(surface, fonts["small"], "You may now close this page.", self.MUTED, 420)
 
     def _draw_subject_screen(self, surface: Any, fonts: Mapping[str, Any], pygame: Any) -> None:
+        if self.anonymous_participant_id is not None:
+            self._draw_alias_screen(surface, fonts, pygame)
+            return
         _centred_text(surface, fonts["title"], "Curriculum Learning", self.TEXT, 170)
         _centred_text(surface, fonts["body"], "Enter your subject ID", self.TEXT, 275)
         box = pygame.Rect(320, 320, 460, 64)
@@ -841,6 +1226,49 @@ class CurriculumGame:
         _centred_text(surface, fonts["small"], "Press Enter to continue", self.MUTED, 425)
         if self.input_error:
             _centred_text(surface, fonts["small"], self.input_error, self.ERROR, 470)
+
+    def _draw_alias_screen(self, surface: Any, fonts: Mapping[str, Any], pygame: Any) -> None:
+        _centred_text(surface, fonts["title"], "Choose your leaderboard name", self.TEXT, 130)
+        options = getattr(self.recorder, "alias_options", []) if self.recorder else []
+        if options:
+            _centred_text(
+                surface,
+                fonts["small"],
+                "Click a name or press 1, 2, or 3",
+                self.MUTED,
+                205,
+            )
+            for index, (alias, dimensions) in enumerate(
+                zip(options, self.ALIAS_BUTTON_RECTS)
+            ):
+                button = pygame.Rect(*dimensions)
+                pygame.draw.rect(surface, self.PANEL, button, border_radius=14)
+                pygame.draw.rect(surface, self.START_BLUE, button, width=3, border_radius=14)
+                _centred_text(
+                    surface,
+                    fonts["heading"],
+                    f"{index + 1}. {_display_alias(alias)}",
+                    self.TEXT,
+                    button.centery,
+                )
+        else:
+            _centred_text(
+                surface,
+                fonts["body"],
+                "Creating your anonymous session...",
+                self.MUTED,
+                350,
+            )
+
+        status = getattr(self.recorder, "alias_status", "") if self.recorder else ""
+        sync_error = getattr(self.recorder, "sync_error", "") if self.recorder else ""
+        message = self.input_error or status
+        colour = self.ERROR if self.input_error else self.MUTED
+        if not message and sync_error:
+            message = "Unable to connect. Retrying automatically..."
+            colour = self.ERROR
+        if message:
+            _centred_text(surface, fonts["small"], message, colour, 575)
 
     def _draw_instruction_screen(self, surface: Any, fonts: Mapping[str, Any], pygame: Any) -> None:
         panel = pygame.Rect(170, 115, 760, 470)
@@ -920,6 +1348,20 @@ class CurriculumGame:
             )
 
         _text(surface, fonts["small"], f"Score  {self.score}", self.TEXT, (40, 35))
+        participant_name = (
+            _display_alias(self.leaderboard_name)
+            if self.leaderboard_name
+            else self.subject_id
+        )
+        if participant_name:
+            _text(
+                surface,
+                fonts["small"],
+                participant_name,
+                self.TEXT,
+                (self.WIDTH // 2, 35),
+                anchor="midtop",
+            )
         phase_name = "Test" if self.is_testing else "Training"
         _text(surface, fonts["small"], phase_name, self.MUTED, (980, 35), anchor="topright")
 
@@ -931,15 +1373,23 @@ class CurriculumGame:
         if self.trial_phase is TrialPhase.FEEDBACK and show_feedback:
             feedback = "+1" if self.last_response_correct else "0"
             colour = self.SUCCESS if self.last_response_correct else self.ERROR
+            _text(
+                surface,
+                fonts["feedback"],
+                feedback,
+                colour,
+                (self.OPERATION_POS[0], 215),
+                anchor="center",
+            )
             if self.timed_out:
-                _centred_text(
+                _text(
                     surface,
                     fonts["body"],
                     "The trial timed out",
                     self.ERROR,
-                    575,
+                    (self.OPERATION_POS[0], 265),
+                    anchor="center",
                 )
-            _centred_text(surface, fonts["feedback"], feedback, colour, 625)
 
     def _draw_complete_screen(self, surface: Any, fonts: Mapping[str, Any], pygame: Any) -> None:
         panel = pygame.Rect(210, 105, 680, 490)
@@ -947,7 +1397,15 @@ class CurriculumGame:
         pygame.draw.rect(surface, self.BORDER, panel, width=2, border_radius=20)
         _centred_text(surface, fonts["title"], "Game complete", self.TEXT, 185)
         _centred_text(surface, fonts["body"], "Thank you for taking part.", self.TEXT, 265)
-        _centred_text(surface, fonts["heading"], f"Your score: {self.score}", self.SUCCESS, 350)
+        if self.leaderboard_name:
+            _centred_text(
+                surface,
+                fonts["body"],
+                f"Leaderboard name: {_display_alias(self.leaderboard_name)}",
+                self.TEXT,
+                310,
+            )
+        _centred_text(surface, fonts["heading"], f"Your score: {self.score}", self.SUCCESS, 365)
         is_remote = self.recorder is not None and hasattr(self.recorder, "is_synced")
         sync_error = getattr(self.recorder, "sync_error", "") if self.recorder else ""
         if self.ranking is not None:
@@ -958,7 +1416,7 @@ class CurriculumGame:
             rank_text = "Saving results..."
         else:
             rank_text = "Ranking unavailable"
-        _centred_text(surface, fonts["body"], rank_text, self.TEXT, 420)
+        _centred_text(surface, fonts["body"], rank_text, self.TEXT, 435)
         completion_hint = (
             "Press Enter to return to the start"
             if self.recorder is None or getattr(self.recorder, "is_synced", True)
@@ -1072,6 +1530,36 @@ def _text(
     rect = rendered.get_rect()
     setattr(rect, anchor, position)
     surface.blit(rendered, rect)
+
+
+def _draw_wrapped_text(
+    surface: Any,
+    font: Any,
+    message: str,
+    colour: tuple[int, int, int],
+    position: tuple[int, int],
+    max_width: int,
+    line_height: int,
+) -> int:
+    """Draw word-wrapped text and return the y coordinate after its last line."""
+
+    lines: list[str] = []
+    current = ""
+    for word in message.split():
+        candidate = word if not current else f"{current} {word}"
+        if current and font.size(candidate)[0] > max_width:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+
+    x, y = position
+    for line in lines:
+        _text(surface, font, line, colour, (x, y))
+        y += line_height
+    return y
 
 
 def _centred_text(

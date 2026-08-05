@@ -29,17 +29,13 @@ jobs:
       - name: Install Pygbag
         run: python -m pip install -r requirements-web.txt
 
-      - name: Insert the public Edge Function URL
+      - name: Insert the public web configuration
         env:
           SUPABASE_FUNCTION_URL: ${{ vars.SUPABASE_FUNCTION_URL }}
-        run: >-
-          python -c "import os; from pathlib import Path;
-          url=os.environ.get('SUPABASE_FUNCTION_URL', '');
-          assert url.startswith('https://'),
-          'Set the SUPABASE_FUNCTION_URL repository variable first';
-          path=Path('scripts/web_config.py');
-          path.write_text(path.read_text(encoding='utf-8').replace(
-          '__SUPABASE_FUNCTION_URL__', url), encoding='utf-8')"
+          DATA_CONTROLLER_NAME: ${{ vars.DATA_CONTROLLER_NAME }}
+          DATA_CONTROLLER_EMAIL: ${{ vars.DATA_CONTROLLER_EMAIL }}
+          DATA_RETENTION_PERIOD: ${{ vars.DATA_RETENTION_PERIOD }}
+        run: python configure_web_build.py
 
       - name: Build WebAssembly game
         run: python -m pygbag --build --ume_block 0 --title "Curriculum Learning Game" scripts

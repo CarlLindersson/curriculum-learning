@@ -4,6 +4,7 @@ const MAX_BODY_BYTES = 250_000;
 const MAX_BATCH_SIZE = 20;
 const PARTICIPANT_RE = /^[A-Za-z0-9_.-]{1,40}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const ALIAS_RE = /^[a-z]+-[a-z]+$/;
 const SHAPES = new Set(["circle", "square", "triangle", "star", "pentagon", "hexagon"]);
 const SIZES = new Set(["small", "large"]);
 const CURRICULA = new Set([
@@ -73,6 +74,29 @@ type SessionRow = {
   session_number: number;
   completed_at: string | null;
 };
+
+type AliasOptionRow = {
+  alias: string;
+  is_current: boolean;
+};
+
+function aliasOffer(raw: unknown) {
+  if (!Array.isArray(raw)) fail("Invalid leaderboard-name response");
+  const rows = raw as AliasOptionRow[];
+  for (const row of rows) {
+    if (!row || typeof row.alias !== "string" || !ALIAS_RE.test(row.alias) ||
+        typeof row.is_current !== "boolean") {
+      fail("Invalid leaderboard-name response");
+    }
+  }
+  const current = rows.find((row) => row.is_current);
+  if (current) {
+    return { leaderboard_name: current.alias, alias_options: [] as string[] };
+  }
+  const options = [...new Set(rows.map((row) => row.alias))].slice(0, 3);
+  if (options.length === 0) fail("No leaderboard names remain");
+  return { leaderboard_name: null, alias_options: options };
+}
 
 function validateTrial(raw: unknown, sessionId: string, session: SessionRow) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) fail("Each trial must be an object");
@@ -178,6 +202,18 @@ Deno.serve(async (request: Request) => {
     if (new TextEncoder().encode(text).length > MAX_BODY_BYTES) fail("Request too large");
     const body = JSON.parse(text) as Record<string, unknown>;
     const action = requiredString(body.action, "action");
+
+    if (action === "identify_participant") {
+      const participantId = requiredString(body.participant_id, "participant_id", 40);
+      if (!PARTICIPANT_RE.test(participantId)) fail("Invalid participant_id");
+      const { data: aliases, error: aliasError } = await db.rpc(
+        "get_curriculum_alias_options",
+        { p_participant_id: participantId },
+      );
+      if (aliasError) throw aliasError;
+      return json(request, 200, { ok: true, ...aliasOffer(aliases) });
+    }
+
     const sessionId = requiredString(body.session_id, "session_id");
     if (!UUID_RE.test(sessionId)) fail("Invalid session_id");
 
@@ -192,7 +228,16 @@ Deno.serve(async (request: Request) => {
         p_curriculum: curriculum,
       });
       if (error) throw error;
-      return json(request, 200, { ok: true, session_number: data });
+      const { data: aliases, error: aliasError } = await db.rpc(
+        "get_curriculum_alias_options",
+        { p_participant_id: participantId },
+      );
+      if (aliasError) throw aliasError;
+      return json(request, 200, {
+        ok: true,
+        session_number: data,
+        ...aliasOffer(aliases),
+      });
     }
 
     const { data: session, error: sessionError } = await db
@@ -201,6 +246,41 @@ Deno.serve(async (request: Request) => {
       .eq("id", sessionId)
       .single();
     if (sessionError || !session) fail("Unknown session");
+
+    if (action === "claim_alias") {
+      const alias = requiredString(body.alias, "alias");
+      if (!ALIAS_RE.test(alias)) fail("Invalid alias");
+      const { data, error } = await db.rpc("claim_curriculum_alias", {
+        p_participant_id: session.participant_id,
+        p_alias: alias,
+      });
+      if (error) throw error;
+      const result = Array.isArray(data) ? data[0] : data;
+      if (result?.claimed === true) {
+        const leaderboardName = requiredString(
+          result.leaderboard_name,
+          "leaderboard_name",
+        );
+        if (!ALIAS_RE.test(leaderboardName)) fail("Invalid leaderboard name");
+        return json(request, 200, {
+          ok: true,
+          claimed: true,
+          leaderboard_name: leaderboardName,
+          alias_options: [],
+        });
+      }
+
+      const { data: aliases, error: aliasError } = await db.rpc(
+        "get_curriculum_alias_options",
+        { p_participant_id: session.participant_id },
+      );
+      if (aliasError) throw aliasError;
+      return json(request, 200, {
+        ok: true,
+        claimed: false,
+        ...aliasOffer(aliases),
+      });
+    }
 
     if (action === "save_trials") {
       if (session.completed_at) fail("Session is already complete");

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sys
 from typing import Any, Awaitable, Callable, Mapping
 from uuid import uuid4
@@ -17,6 +18,8 @@ from curriculum_pygame import (
 
 
 PostJson = Callable[[Mapping[str, Any]], Awaitable[dict[str, Any]]]
+RememberPending = Callable[[str, list[Mapping[str, Any]]], None]
+ALIAS_RE = re.compile(r"^[a-z]+-[a-z]+$")
 
 
 class PygbagJsonTransport:
@@ -45,6 +48,45 @@ window.CurriculumFetch.POST = function* (url, data) {
     while (result === undefined) yield;
     yield result;
 };
+window.CurriculumFetch.pending = window.CurriculumFetch.pending || {};
+window.CurriculumFetch.requestOptions = function(data, keepalive) {
+    return {
+        method: "POST",
+        headers: {"Accept": "application/json", "Content-Type": "application/json"},
+        body: data,
+        keepalive: keepalive
+    };
+};
+window.CurriculumFetch.remember = function(sessionId, url, payloadsJson) {
+    try {
+        const payloads = JSON.parse(payloadsJson);
+        if (payloads.length) {
+            window.CurriculumFetch.pending[sessionId] = {url: url, payloads: payloads};
+        } else {
+            delete window.CurriculumFetch.pending[sessionId];
+        }
+    } catch (error) {
+        console.warn("Could not retain unsaved curriculum trials in page memory", error);
+    }
+};
+window.CurriculumFetch.flushOnExit = function() {
+    for (const pending of Object.values(window.CurriculumFetch.pending)) {
+        for (const payload of pending.payloads) {
+            try {
+                fetch(
+                    pending.url,
+                    window.CurriculumFetch.requestOptions(JSON.stringify(payload), true)
+                ).catch(() => {});
+            } catch (error) {
+                // Page-exit upload is best effort and may be terminated by the browser.
+            }
+        }
+    }
+};
+if (!window.CurriculumFetch.exitHandlerInstalled) {
+    window.CurriculumFetch.exitHandlerInstalled = true;
+    window.addEventListener("pagehide", window.CurriculumFetch.flushOnExit);
+}
 """
 
     def __init__(self, endpoint: str) -> None:
@@ -73,6 +115,16 @@ window.CurriculumFetch.POST = function* (url, data) {
             raise RuntimeError(body.get("error", "Data service rejected the request"))
         return body
 
+    def remember_pending(
+        self, session_id: str, payloads: list[Mapping[str, Any]]
+    ) -> None:
+        """Retain unsent batches in page memory for a best-effort exit upload."""
+
+        encoded = json.dumps(payloads, separators=(",", ":"))
+        self.platform.window.CurriculumFetch.remember(
+            session_id, self.endpoint, encoded
+        )
+
 
 class RemoteSessionRecorder:
     """Queue trial rows and synchronize them without blocking the Pygame loop."""
@@ -88,11 +140,14 @@ class RemoteSessionRecorder:
         endpoint: str | None = None,
         *,
         post_json: PostJson | None = None,
+        remember_pending: RememberPending | None = None,
     ) -> None:
         if post_json is None:
             if endpoint is None:
                 raise ValueError("endpoint is required when post_json is not supplied")
-            post_json = PygbagJsonTransport(endpoint).post
+            transport = PygbagJsonTransport(endpoint)
+            post_json = transport.post
+            remember_pending = transport.remember_pending
         self.participant_id = participant_id
         self.curriculum = curriculum
         self.session_id = str(uuid4())
@@ -100,6 +155,9 @@ class RemoteSessionRecorder:
         self.records: list[dict[str, Any]] = []
         self._pending: list[dict[str, Any]] = []
         self._post_json = post_json
+        self._remember_pending = remember_pending
+        self._identity_checked = False
+        self._start_requested = False
         self._session_started = False
         self._finish_requested = False
         self._completion_acknowledged = False
@@ -110,7 +168,24 @@ class RemoteSessionRecorder:
         self._retry_count = 0
         self._retry_at = 0.0
         self.ranking: int | None = None
+        self.alias_options: list[str] = []
+        self.leaderboard_name: str | None = None
+        self.alias_status = ""
+        self._selected_alias: str | None = None
         self._sync_error = ""
+
+    def choose_alias(self, alias: str) -> None:
+        """Queue one of the server-offered aliases for an atomic claim."""
+
+        if self.leaderboard_name is not None:
+            return
+        if self._selected_alias is not None:
+            return
+        if alias not in self.alias_options:
+            raise ValueError("Choose one of the offered leaderboard names")
+        self._selected_alias = alias
+        self._start_requested = True
+        self.alias_status = "Reserving your leaderboard name..."
 
     def record_trial(
         self,
@@ -142,6 +217,7 @@ class RemoteSessionRecorder:
         )
         self.records.append(record)
         self._pending.append(record)
+        self._persist_pending()
 
     def finish(self, score: int) -> None:
         self._final_score = score
@@ -152,7 +228,13 @@ class RemoteSessionRecorder:
     def is_synced(self) -> bool:
         if self._finish_requested:
             return self._completion_acknowledged
-        return self._session_started and not self._pending and self._task is None
+        return self.is_ready and not self._pending and self._task is None
+
+    @property
+    def is_ready(self) -> bool:
+        """Trials must not begin until the server has created the session row."""
+
+        return self._session_started and self.leaderboard_name is not None
 
     @property
     def sync_error(self) -> str:
@@ -167,7 +249,15 @@ class RemoteSessionRecorder:
             await asyncio.sleep(0)
             return
 
-        if not self._session_started:
+        if not self._identity_checked:
+            self._start_task(
+                "identity",
+                {
+                    "action": "identify_participant",
+                    "participant_id": self.participant_id,
+                },
+            )
+        elif self._start_requested and not self._session_started:
             self._start_task(
                 "start",
                 {
@@ -177,20 +267,24 @@ class RemoteSessionRecorder:
                     "curriculum": self.curriculum.value,
                 },
             )
+        elif self.leaderboard_name is None:
+            if self._selected_alias is not None:
+                self._start_task(
+                    "alias",
+                    {
+                        "action": "claim_alias",
+                        "session_id": self.session_id,
+                        "alias": self._selected_alias,
+                    },
+                )
         elif self._pending:
             batch = self._pending[: self.MAX_BATCH_SIZE]
-            serializable_batch = []
-            for row in batch:
-                converted = dict(row)
-                converted["session_number"] = self.session_number
-                converted["option_symbols"] = json.loads(converted["option_symbols"])
-                serializable_batch.append(converted)
             self._start_task(
                 "trials",
                 {
                     "action": "save_trials",
                     "session_id": self.session_id,
-                    "trials": serializable_batch,
+                    "trials": self._serializable_batch(batch),
                 },
                 count=len(batch),
             )
@@ -214,16 +308,42 @@ class RemoteSessionRecorder:
         assert self._task is not None
         try:
             result = self._task.result()
-            if self._task_kind == "start":
+            if self._task_kind == "identity":
+                self._identity_checked = True
+                self._read_alias_offer(result)
+                self.alias_status = ""
+            elif self._task_kind == "start":
                 self.session_number = int(result["session_number"])
                 self._session_started = True
+                self._read_alias_offer(result)
+                self.alias_status = ""
                 for row in self._pending:
                     row["session_number"] = self.session_number
+                self._persist_pending()
+            elif self._task_kind == "alias":
+                if result.get("claimed") is True:
+                    leaderboard_name = result.get("leaderboard_name")
+                    if not isinstance(leaderboard_name, str) or not ALIAS_RE.fullmatch(
+                        leaderboard_name
+                    ):
+                        raise RuntimeError("Data service returned an invalid leaderboard name")
+                    self.leaderboard_name = leaderboard_name
+                    self.alias_options = []
+                    self._selected_alias = None
+                    self.alias_status = ""
+                else:
+                    self._selected_alias = None
+                    self._read_alias_offer(result)
+                    self.alias_status = (
+                        "That name was just taken. Please choose another one."
+                    )
             elif self._task_kind == "trials":
                 del self._pending[: self._task_count]
+                self._persist_pending()
             elif self._task_kind == "complete":
                 self.ranking = int(result["ranking"])
                 self._completion_acknowledged = True
+                self._persist_pending()
             self._retry_count = 0
             self._retry_at = 0.0
             self._sync_error = ""
@@ -236,3 +356,58 @@ class RemoteSessionRecorder:
             self._task = None
             self._task_kind = ""
             self._task_count = 0
+
+    def _read_alias_offer(self, result: Mapping[str, Any]) -> None:
+        leaderboard_name = result.get("leaderboard_name")
+        if leaderboard_name is not None:
+            if not isinstance(leaderboard_name, str) or not ALIAS_RE.fullmatch(
+                leaderboard_name
+            ):
+                raise RuntimeError("Data service returned an invalid leaderboard name")
+            self.leaderboard_name = leaderboard_name
+            self.alias_options = []
+            self._selected_alias = None
+            return
+
+        raw_options = result.get("alias_options")
+        if not isinstance(raw_options, list) or not raw_options:
+            raise RuntimeError("Data service did not offer any leaderboard names")
+        options: list[str] = []
+        for option in raw_options[:3]:
+            if not isinstance(option, str) or not ALIAS_RE.fullmatch(option):
+                raise RuntimeError("Data service returned an invalid leaderboard-name option")
+            if option not in options:
+                options.append(option)
+        if not options:
+            raise RuntimeError("Data service did not offer any leaderboard names")
+        self.alias_options = options
+
+    def _serializable_batch(
+        self, batch: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        serializable = []
+        for row in batch:
+            converted = dict(row)
+            converted["session_number"] = self.session_number
+            converted["option_symbols"] = json.loads(converted["option_symbols"])
+            serializable.append(converted)
+        return serializable
+
+    def _persist_pending(self) -> None:
+        if self._remember_pending is None or not self._session_started:
+            return
+        payloads: list[Mapping[str, Any]] = []
+        for offset in range(0, len(self._pending), self.MAX_BATCH_SIZE):
+            batch = self._pending[offset : offset + self.MAX_BATCH_SIZE]
+            payloads.append(
+                {
+                    "action": "save_trials",
+                    "session_id": self.session_id,
+                    "trials": self._serializable_batch(batch),
+                }
+            )
+        try:
+            self._remember_pending(self.session_id, payloads)
+        except Exception:
+            # Normal network synchronization remains available if the JS bridge fails.
+            pass

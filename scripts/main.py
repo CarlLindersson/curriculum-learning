@@ -5,10 +5,24 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from uuid import uuid4
 
-from curriculum_pygame import CurriculumGame, CurriculumMode
+from curriculum_pygame import CurriculumGame, CurriculumMode, PrivacyNotice
 from remote_recorder import RemoteSessionRecorder
-from web_config import DEFAULT_CURRICULUM, SUPABASE_FUNCTION_URL
+from web_config import (
+    DATA_CONTROLLER_EMAIL,
+    DATA_CONTROLLER_NAME,
+    DATA_RETENTION_PERIOD,
+    DEFAULT_CURRICULUM,
+    PRIVACY_NOTICE_VERSION,
+    SUPABASE_FUNCTION_URL,
+)
+
+
+def new_anonymous_participant_id() -> str:
+    """Create a fresh in-memory code for one play; never persist it in the browser."""
+
+    return str(uuid4())
 
 
 def remote_recorder_factory(
@@ -41,6 +55,15 @@ async def main() -> None:
     game = CurriculumGame(
         {"mode": curriculum},
         recorder_factory=remote_recorder_factory,
+        anonymous_participant_id=new_anonymous_participant_id(),
+        new_anonymous_participant=new_anonymous_participant_id,
+        privacy_notice=PrivacyNotice(
+            controller_name=DATA_CONTROLLER_NAME,
+            contact_email=DATA_CONTROLLER_EMAIL,
+            retention_period=DATA_RETENTION_PERIOD,
+            version=PRIVACY_NOTICE_VERSION,
+        ),
+        require_privacy_acceptance=True,
     )
     await game.run_async()
 
