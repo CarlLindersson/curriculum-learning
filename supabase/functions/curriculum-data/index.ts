@@ -5,7 +5,8 @@ const MAX_BATCH_SIZE = 20;
 const PARTICIPANT_RE = /^[A-Za-z0-9_.-]{1,40}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ALIAS_RE = /^[a-z]+-[a-z]+$/;
-const SHAPES = new Set(["circle", "square", "triangle", "star", "pentagon", "hexagon"]);
+// `hexagon` remains valid for an older page instance that was already loaded.
+const SHAPES = new Set(["circle", "square", "triangle", "star", "pentagon", "x", "hexagon"]);
 const SIZES = new Set(["small", "large"]);
 const CURRICULA = new Set([
   "interleaved",
