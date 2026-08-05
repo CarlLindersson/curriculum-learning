@@ -1034,12 +1034,12 @@ class CurriculumGame:
         pygame.draw.rect(surface, self.BORDER, panel, width=2, border_radius=18)
 
         left_x, right_x = 92, 566
-        _text(surface, fonts["body"], "About this task", self.TEXT, (left_x, 108))
+        _text(surface, fonts["body"], "About this pilot", self.TEXT, (left_x, 108))
         _draw_wrapped_text(
             surface,
             notice_font,
             (
-                "This pilot evaluates how people learn across different curricula."
+                "This pilot evaluates learning across curricula."
             ),
             self.MUTED,
             (left_x, 146),
@@ -1052,9 +1052,8 @@ class CurriculumGame:
             notice_font,
             (
                 "Only task data (choices, response times, scores and trial details), "
-                "a random task ID (e.g., a3f2c9d1...) and game alias (e.g., "
-                "fantastic-otter) are saved. We do not collect your real name, email "
-                "address or a persistent browser ID."
+                "a random task ID (e.g., a3f2cc9d1...) and game alias (e.g., "
+                "fantastic-otter) are saved."
             ),
             self.MUTED,
             (left_x, 248),
@@ -1066,8 +1065,7 @@ class CurriculumGame:
             surface,
             notice_font,
             (
-                "To estimate learning rates and improve the task design. The lawful "
-                "basis is legitimate interests in evaluating this low-risk pilot."
+                "To estimate learning rates across curricula and improve task design."
             ),
             self.MUTED,
             (left_x, 412),
@@ -1086,26 +1084,24 @@ class CurriculumGame:
             surface,
             notice_font,
             (
-                "GitHub Pages hosts the game and Supabase stores the task data. Both "
-                "may keep short-lived IP address and browser logs to operate and secure "
-                "their services; these logs are not in the pilot database. Data may be "
-                "processed outside the UK under contractual safeguards."
+                "GitHub Pages hosts the task and Supabase stores the task data. Both "
+                "providers use your IP address to operate their services and may keep "
+                "a short-lived record of it as part of their normal service."
             ),
             self.MUTED,
             (right_x, 146),
             438,
             24,
         )
-        _text(surface, fonts["body"], "Your choice and rights", self.TEXT, (right_x, 292))
+        _text(surface, fonts["body"], "Opt out at any time", self.TEXT, (right_x, 292))
         _draw_wrapped_text(
             surface,
             notice_font,
             (
-                f"Controller: {notice.controller_name}. Taking part is voluntary; you "
-                "may stop at any time. Saved data remains unless you ask for deletion "
-                f"and is kept {notice.retention_period}. For access, deletion or "
-                f"objection, email {notice.contact_email} and quote your alias. You can "
-                "also complain to the UK Information Commissioner's Office (ico.org.uk)."
+                "Taking part is voluntary and you may stop at any time. Saved trial "
+                f"data remains {notice.retention_period} unless you ask for it to be "
+                f"deleted. To ask for data deletion, email me at {notice.contact_email} "
+                "and include your game alias."
             ),
             self.MUTED,
             (right_x, 330),
