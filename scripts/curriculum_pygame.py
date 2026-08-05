@@ -607,11 +607,13 @@ class CurriculumGame:
     START_POS = (210, 350)
     OPERATION_POS = (540, 350)
     OPTION_POSITIONS = ((860, 245), (860, 465))
+    FEEDBACK_OPTION_OFFSET = 120
     ALIAS_BUTTON_RECTS = (
         (250, 260, 600, 70),
         (250, 355, 600, 70),
         (250, 450, 600, 70),
     )
+    INSTRUCTION_START_RECT = (430, 480, 240, 60)
     PRIVACY_AGE_RECT = (105, 514, 28, 28)
     PRIVACY_PARTICIPATION_RECT = (105, 558, 28, 28)
     PRIVACY_AGE_HIT_RECT = (95, 506, 620, 42)
@@ -801,8 +803,17 @@ class CurriculumGame:
                     self.input_error = ""
             return
 
-        if self.screen is Screen.INSTRUCTIONS and event.type == pygame.KEYDOWN:
-            if event.key in (pygame.K_RETURN, pygame.K_SPACE):
+        if self.screen is Screen.INSTRUCTIONS:
+            if event.type == pygame.KEYDOWN and event.key in (
+                pygame.K_RETURN,
+                pygame.K_SPACE,
+            ):
+                self._begin_game(now)
+            elif (
+                event.type == pygame.MOUSEBUTTONDOWN
+                and event.button == 1
+                and pygame.Rect(*self.INSTRUCTION_START_RECT).collidepoint(event.pos)
+            ):
                 self._begin_game(now)
             return
 
@@ -1289,13 +1300,32 @@ class CurriculumGame:
         _centred_text(surface, fonts["title"], "Instructions", self.TEXT, 185)
         lines = (
             "Your goal is to earn as many points as possible.",
-            "Select the correct option on each trial.",
+            "The two green symbols are your options on each trial.",
+            "Select the option you think is correct.",
             "You will need to work out the rules by trial and error.",
             "Use the up/down arrow keys or click an option.",
         )
         for index, line in enumerate(lines):
-            _centred_text(surface, fonts["body"], line, self.TEXT, 285 + index * 48)
-        _centred_text(surface, fonts["small"], "Press Enter or Space to start", self.MUTED, 535)
+            _centred_text(surface, fonts["body"], line, self.TEXT, 255 + index * 42)
+
+        start_button = pygame.Rect(*self.INSTRUCTION_START_RECT)
+        pygame.draw.rect(surface, self.START_BLUE, start_button, border_radius=12)
+        pygame.draw.rect(surface, self.TEXT, start_button, width=2, border_radius=12)
+        _text(
+            surface,
+            fonts["heading"],
+            "Start",
+            self.TEXT,
+            start_button.center,
+            anchor="center",
+        )
+        _centred_text(
+            surface,
+            fonts["small"],
+            "Or press Enter or Space",
+            self.MUTED,
+            560,
+        )
 
     def _draw_trial_screen(
         self,
@@ -1385,12 +1415,24 @@ class CurriculumGame:
         if self.trial_phase is TrialPhase.FEEDBACK and show_feedback:
             feedback = "+1" if self.last_response_correct else "0"
             colour = self.SUCCESS if self.last_response_correct else self.ERROR
+            if self.selected_option is not None:
+                chosen_centre = self.OPTION_POSITIONS[self.selected_option]
+            else:
+                chosen_centre = (
+                    self.OPTION_POSITIONS[0][0],
+                    sum(position[1] for position in self.OPTION_POSITIONS)
+                    // len(self.OPTION_POSITIONS),
+                )
+            feedback_position = (
+                chosen_centre[0] - self.FEEDBACK_OPTION_OFFSET,
+                chosen_centre[1],
+            )
             _text(
                 surface,
                 fonts["feedback"],
                 feedback,
                 colour,
-                (self.OPERATION_POS[0], 215),
+                feedback_position,
                 anchor="center",
             )
             if self.timed_out:
