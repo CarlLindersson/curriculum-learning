@@ -697,7 +697,7 @@ class CurriculumGame:
             "heading": pygame.font.Font(None, 40),
             "body": pygame.font.Font(None, 30),
             "small": pygame.font.Font(None, 23),
-            "notice": pygame.font.Font(None, 20),
+            "notice": pygame.font.Font(None, 22),
             "feedback": pygame.font.Font(None, 78),
         }
         running = True
@@ -1025,7 +1025,7 @@ class CurriculumGame:
         _centred_text(
             surface,
             fonts["heading"],
-            "Participant information and privacy notice",
+            "Pilot information and privacy",
             self.TEXT,
             48,
         )
@@ -1034,79 +1034,83 @@ class CurriculumGame:
         pygame.draw.rect(surface, self.BORDER, panel, width=2, border_radius=18)
 
         left_x, right_x = 92, 566
-        _text(surface, fonts["body"], "About this pilot", self.TEXT, (left_x, 102))
+        _text(surface, fonts["body"], "About this task", self.TEXT, (left_x, 108))
         _draw_wrapped_text(
             surface,
             notice_font,
             (
-                "This private pilot evaluates whether a curriculum-learning game "
-                "is understandable and appropriately difficult. Taking part is voluntary."
+                "This pilot evaluates how people learn across different curricula."
             ),
             self.MUTED,
-            (left_x, 140),
+            (left_x, 146),
             420,
-            22,
+            24,
         )
-        _text(surface, fonts["body"], "What is recorded", self.TEXT, (left_x, 224))
+        _text(surface, fonts["body"], "What is recorded", self.TEXT, (left_x, 210))
         _draw_wrapped_text(
             surface,
             notice_font,
             (
-                "A newly generated participant/session code and alias; task condition; "
-                "choices, correctness, response times, timeouts, scores and timestamps. "
-                "We do not ask for your real name, email address or date of birth."
+                "Only task data (choices, response times, scores and trial details), "
+                "a random task ID (e.g., a3f2c9d1...) and game alias (e.g., "
+                "fantastic-otter) are saved. We do not collect your real name, email "
+                "address or a persistent browser ID."
             ),
             self.MUTED,
-            (left_x, 262),
+            (left_x, 248),
             420,
-            22,
+            24,
         )
-        _text(surface, fonts["body"], "How it is used", self.TEXT, (left_x, 384))
+        _text(surface, fonts["body"], "How the data is used", self.TEXT, (left_x, 374))
         _draw_wrapped_text(
             surface,
             notice_font,
             (
-                "The data is used only to assess and improve the task. Your generated "
-                "alias and score are used to calculate and display your game ranking."
+                "To estimate learning rates and improve the task design. The lawful "
+                "basis is legitimate interests in evaluating this low-risk pilot."
             ),
             self.MUTED,
-            (left_x, 422),
+            (left_x, 412),
             420,
-            22,
+            24,
         )
 
-        _text(surface, fonts["body"], "Legal basis and services", self.TEXT, (right_x, 102))
+        _text(
+            surface,
+            fonts["body"],
+            "Page and database services",
+            self.TEXT,
+            (right_x, 108),
+        )
         _draw_wrapped_text(
             surface,
             notice_font,
             (
-                "The lawful basis is the controller's legitimate interests in evaluating "
-                "this low-risk task. GitHub Pages hosts the game and Supabase processes "
-                "and stores the study data. They may process limited request logs, such "
-                "as IP address and browser details, and may process data outside the UK "
-                "under contractual safeguards. Data is not sold or used for marketing."
+                "GitHub Pages hosts the game and Supabase stores the task data. Both "
+                "may keep short-lived IP address and browser logs to operate and secure "
+                "their services; these logs are not in the pilot database. Data may be "
+                "processed outside the UK under contractual safeguards."
             ),
             self.MUTED,
-            (right_x, 140),
+            (right_x, 146),
             438,
-            22,
+            24,
         )
-        _text(surface, fonts["body"], "Retention and your rights", self.TEXT, (right_x, 292))
+        _text(surface, fonts["body"], "Your choice and rights", self.TEXT, (right_x, 292))
         _draw_wrapped_text(
             surface,
             notice_font,
             (
-                f"Study records are retained {notice.retention_period}. You may stop at "
-                "any time. Already saved records remain unless you request deletion. "
-                "To request access, deletion or object to processing, contact "
-                f"{notice.controller_name} at {notice.contact_email} and quote your "
-                "generated alias. You may also complain to the UK Information "
-                "Commissioner's Office (ico.org.uk)."
+                f"Controller: {notice.controller_name}. Taking part is voluntary; you "
+                "may stop at any time. Saved data remains unless you ask for deletion "
+                f"and is kept {notice.retention_period}. For access, deletion or "
+                f"objection, email {notice.contact_email} and quote your alias. You can "
+                "also complain to the UK Information Commissioner's Office (ico.org.uk)."
             ),
             self.MUTED,
             (right_x, 330),
             438,
-            22,
+            24,
         )
 
         self._draw_checkbox(
@@ -1157,7 +1161,7 @@ class CurriculumGame:
             fonts["small"],
             f"Notice version {notice.version}",
             self.MUTED,
-            (1025, 486),
+            (1025, 68),
             anchor="bottomright",
         )
 
