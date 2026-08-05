@@ -607,7 +607,6 @@ class CurriculumGame:
     START_POS = (210, 350)
     OPERATION_POS = (540, 350)
     OPTION_POSITIONS = ((860, 245), (860, 465))
-    FEEDBACK_OPTION_OFFSET = 120
     ALIAS_BUTTON_RECTS = (
         (250, 260, 600, 70),
         (250, 355, 600, 70),
@@ -1415,24 +1414,12 @@ class CurriculumGame:
         if self.trial_phase is TrialPhase.FEEDBACK and show_feedback:
             feedback = "+1" if self.last_response_correct else "0"
             colour = self.SUCCESS if self.last_response_correct else self.ERROR
-            if self.selected_option is not None:
-                chosen_centre = self.OPTION_POSITIONS[self.selected_option]
-            else:
-                chosen_centre = (
-                    self.OPTION_POSITIONS[0][0],
-                    sum(position[1] for position in self.OPTION_POSITIONS)
-                    // len(self.OPTION_POSITIONS),
-                )
-            feedback_position = (
-                chosen_centre[0] - self.FEEDBACK_OPTION_OFFSET,
-                chosen_centre[1],
-            )
             _text(
                 surface,
                 fonts["feedback"],
                 feedback,
                 colour,
-                feedback_position,
+                (self.OPERATION_POS[0], 140),
                 anchor="center",
             )
             if self.timed_out:
@@ -1441,7 +1428,7 @@ class CurriculumGame:
                     fonts["body"],
                     "The trial timed out",
                     self.ERROR,
-                    (self.OPERATION_POS[0], 265),
+                    (self.OPERATION_POS[0], 210),
                     anchor="center",
                 )
 
