@@ -702,6 +702,7 @@ class CurriculumGame:
             "heading": pygame.font.Font(None, 40),
             "body": pygame.font.Font(None, 30),
             "small": pygame.font.Font(None, 23),
+            "hud": pygame.font.Font(None, 42),
             "notice": pygame.font.Font(None, 22),
             "feedback": pygame.font.Font(None, 78),
         }
@@ -1388,7 +1389,7 @@ class CurriculumGame:
                 pygame,
             )
 
-        _text(surface, fonts["small"], f"Score  {self.score}", self.TEXT, (40, 35))
+        _text(surface, fonts["hud"], f"Score  {self.score}", self.TEXT, (40, 35))
         participant_name = (
             _display_alias(self.leaderboard_name)
             if self.leaderboard_name
@@ -1397,14 +1398,14 @@ class CurriculumGame:
         if participant_name:
             _text(
                 surface,
-                fonts["small"],
+                fonts["hud"],
                 participant_name,
                 self.TEXT,
                 (self.WIDTH // 2, 35),
                 anchor="midtop",
             )
         phase_name = "Test" if self.is_testing else "Training"
-        _text(surface, fonts["small"], phase_name, self.MUTED, (980, 35), anchor="topright")
+        _text(surface, fonts["hud"], phase_name, self.MUTED, (980, 35), anchor="topright")
 
         show_feedback = (
             self.last_response_correct
