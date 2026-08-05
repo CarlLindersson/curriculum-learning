@@ -71,7 +71,7 @@ class CurriculumConfig:
 
     mode: CurriculumMode = CurriculumMode.INTERLEAVED
     mastery_threshold: float = 0.80
-    minimum_trials_per_operation: int = 10
+    minimum_trials_per_operation: int = 15
     maximum_training_trials: int = 100
     test_trials: int = 40
     block_size: int = 20
@@ -217,10 +217,12 @@ class CurriculumScheduler:
 
     def operation_mastered(self, operation: Operation) -> bool:
         values = self.outcomes[operation]
-        if self.config.mode is CurriculumMode.BLOCKED:
-            # In the blocked curriculum, mastery is evaluated continuously over
-            # the most recent complete block rather than over lifetime accuracy.
-            window_size = self.config.block_size
+        if self.config.mode in (
+            CurriculumMode.BLOCKED,
+            CurriculumMode.PROGRESSIVELY_INTERLEAVED,
+        ):
+            # The two online curricula use the same rolling mastery window.
+            window_size = self.config.minimum_trials_per_operation
             recent_values = values[-window_size:]
             return (
                 len(recent_values) == window_size
