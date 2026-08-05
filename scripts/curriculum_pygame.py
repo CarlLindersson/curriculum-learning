@@ -217,6 +217,15 @@ class CurriculumScheduler:
 
     def operation_mastered(self, operation: Operation) -> bool:
         values = self.outcomes[operation]
+        if self.config.mode is CurriculumMode.BLOCKED:
+            # In the blocked curriculum, mastery is evaluated continuously over
+            # the most recent complete block rather than over lifetime accuracy.
+            window_size = self.config.block_size
+            recent_values = values[-window_size:]
+            return (
+                len(recent_values) == window_size
+                and sum(recent_values) / window_size >= self.config.mastery_threshold
+            )
         return (
             len(values) >= self.config.minimum_trials_per_operation
             and sum(values) / len(values) >= self.config.mastery_threshold
@@ -241,8 +250,11 @@ class CurriculumScheduler:
         if mode is CurriculumMode.INTERLEAVED:
             return self.rng.choice(tuple(Operation))
         if mode is CurriculumMode.BLOCKED:
-            block = (self.trial_count // self.config.block_size) % 2
-            return (Operation.SIZE, Operation.SHAPE)[block]
+            return (
+                Operation.SHAPE
+                if self.operation_mastered(Operation.SIZE)
+                else Operation.SIZE
+            )
         if mode is CurriculumMode.PROGRESSIVELY_INTERLEAVED:
             if self.initial_stage_trials is None:
                 return Operation.SIZE
@@ -265,7 +277,11 @@ class CurriculumScheduler:
         if mode is CurriculumMode.INTERLEAVED:
             return "interleaved"
         if mode is CurriculumMode.BLOCKED:
-            return f"block{self.trial_count // self.config.block_size + 1}"
+            return (
+                "block2"
+                if self.operation_mastered(Operation.SIZE)
+                else "block1"
+            )
         if mode is CurriculumMode.PROGRESSIVELY_INTERLEAVED:
             return "stage1" if self.initial_stage_trials is None else "stage2"
         if self.initial_stage_trials is None:
