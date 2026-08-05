@@ -12,7 +12,7 @@ import math
 import random
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -628,6 +628,7 @@ class CurriculumGame:
         recorder_factory: Callable[[str, CurriculumMode, Path | None], Any] | None = None,
         anonymous_participant_id: str | None = None,
         new_anonymous_participant: Callable[[], str] | None = None,
+        curriculum_for_participant: Callable[[str], CurriculumMode | str] | None = None,
         privacy_notice: PrivacyNotice | None = None,
         require_privacy_acceptance: bool = False,
     ) -> None:
@@ -641,6 +642,7 @@ class CurriculumGame:
         self.recorder_factory = recorder_factory
         self.anonymous_participant_id = anonymous_participant_id
         self.new_anonymous_participant = new_anonymous_participant
+        self.curriculum_for_participant = curriculum_for_participant
         self.privacy_notice = privacy_notice
         self.require_privacy_acceptance = require_privacy_acceptance
         if self.require_privacy_acceptance and self.privacy_notice is None:
@@ -978,6 +980,14 @@ class CurriculumGame:
             if not re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", participant_id):
                 raise ValueError("The new anonymous participant code has an invalid format")
             self.anonymous_participant_id = participant_id
+            if self.curriculum_for_participant is not None:
+                assigned_mode = self.curriculum_for_participant(participant_id)
+                mode = (
+                    assigned_mode
+                    if isinstance(assigned_mode, CurriculumMode)
+                    else _normalise_curriculum_mode(assigned_mode)
+                )
+                self.config = replace(self.config, mode=mode)
         self.screen = (
             Screen.PRIVACY if self.require_privacy_acceptance else Screen.SUBJECT_ID
         )

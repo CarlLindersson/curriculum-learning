@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import os
-import sys
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from curriculum_pygame import CurriculumGame, CurriculumMode, PrivacyNotice
 from remote_recorder import RemoteSessionRecorder
@@ -13,9 +11,14 @@ from web_config import (
     DATA_CONTROLLER_EMAIL,
     DATA_CONTROLLER_NAME,
     DATA_RETENTION_PERIOD,
-    DEFAULT_CURRICULUM,
     PRIVACY_NOTICE_VERSION,
     SUPABASE_FUNCTION_URL,
+)
+
+
+PILOT_CURRICULA = (
+    CurriculumMode.BLOCKED,
+    CurriculumMode.PROGRESSIVELY_INTERLEAVED,
 )
 
 
@@ -23,6 +26,12 @@ def new_anonymous_participant_id() -> str:
     """Create a fresh in-memory code for one play; never persist it in the browser."""
 
     return str(uuid4())
+
+
+def curriculum_for_participant(participant_id: str) -> CurriculumMode:
+    """Allocate a random UUID to either pilot curriculum with equal probability."""
+
+    return PILOT_CURRICULA[UUID(participant_id).int % len(PILOT_CURRICULA)]
 
 
 def remote_recorder_factory(
@@ -42,21 +51,14 @@ async def main() -> None:
         raise RuntimeError(
             "Set SUPABASE_FUNCTION_URL in web_config.py or through the Pages build."
         )
-    curriculum = os.environ.get("CURRICULUM", DEFAULT_CURRICULUM).lower()
-    if sys.platform == "emscripten":
-        import platform
-
-        query = str(platform.window.location.search).lstrip("?")
-        for item in query.split("&"):
-            key, separator, value = item.partition("=")
-            if separator and key.lower() == "curriculum":
-                curriculum = value.lower()
-                break
+    participant_id = new_anonymous_participant_id()
+    curriculum = curriculum_for_participant(participant_id)
     game = CurriculumGame(
-        {"mode": curriculum},
+        {"mode": curriculum.value},
         recorder_factory=remote_recorder_factory,
-        anonymous_participant_id=new_anonymous_participant_id(),
+        anonymous_participant_id=participant_id,
         new_anonymous_participant=new_anonymous_participant_id,
+        curriculum_for_participant=curriculum_for_participant,
         privacy_notice=PrivacyNotice(
             controller_name=DATA_CONTROLLER_NAME,
             contact_email=DATA_CONTROLLER_EMAIL,
