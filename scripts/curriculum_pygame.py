@@ -35,15 +35,16 @@ class CurriculumMode(str, Enum):
 
 
 TRAINING_SHAPES = ("square", "circle")
-NOVEL_SHAPES = ("triangle", "star", "pentagon", "x")
+NOVEL_SHAPES = ("triangle", "star", "pentagon", "plus")
 SHAPE_PARTNERS = {
     "square": "circle",
     "circle": "square",
     "triangle": "star",
     "star": "triangle",
-    "pentagon": "x",
+    "pentagon": "plus",
+    "plus": "pentagon",
+    # Retain support for trials created by versions that used an X or hexagon.
     "x": "pentagon",
-    # Retain support for trials created by versions that used a hexagon.
     "hexagon": "pentagon",
 }
 LARGE_SYMBOL_RADIUS = 58
@@ -1506,7 +1507,25 @@ def _draw_symbol(
         rect = pygame.Rect(x - radius, y - radius, radius * 2, radius * 2)
         pygame.draw.rect(surface, colour, rect, border_radius=max(4, radius // 8))
         return
-    if state.shape == "x":
+    if state.shape == "plus":
+        offset = round(radius * 0.72)
+        width = max(12, round(radius * 0.30))
+        pygame.draw.line(
+            surface,
+            colour,
+            (x - offset, y),
+            (x + offset, y),
+            width=width,
+        )
+        pygame.draw.line(
+            surface,
+            colour,
+            (x, y - offset),
+            (x, y + offset),
+            width=width,
+        )
+        return
+    if state.shape == "x":  # Legacy support for an older loaded page.
         offset = round(radius * 0.58)
         width = max(12, round(radius * 0.30))
         pygame.draw.line(
