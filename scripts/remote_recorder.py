@@ -20,6 +20,10 @@ from curriculum_pygame import (
 PostJson = Callable[[Mapping[str, Any]], Awaitable[dict[str, Any]]]
 RememberPending = Callable[[str, list[Mapping[str, Any]]], None]
 ALIAS_RE = re.compile(r"^[a-z]+-[a-z]+$")
+BALANCED_CURRICULA = {
+    CurriculumMode.BLOCKED,
+    CurriculumMode.PROGRESSIVELY_INTERLEAVED,
+}
 
 
 class PygbagJsonTransport:
@@ -149,7 +153,10 @@ class RemoteSessionRecorder:
             post_json = transport.post
             remember_pending = transport.remember_pending
         self.participant_id = participant_id
+        # This is provisional until start_session returns the authoritative
+        # server allocation. Trials cannot begin before that response.
         self.curriculum = curriculum
+        self.assigned_curriculum: CurriculumMode | None = None
         self.session_id = str(uuid4())
         self.session_number = 0
         self.records: list[dict[str, Any]] = []
@@ -234,7 +241,11 @@ class RemoteSessionRecorder:
     def is_ready(self) -> bool:
         """Trials must not begin until the server has created the session row."""
 
-        return self._session_started and self.leaderboard_name is not None
+        return (
+            self._session_started
+            and self.assigned_curriculum is not None
+            and self.leaderboard_name is not None
+        )
 
     @property
     def sync_error(self) -> str:
@@ -264,7 +275,6 @@ class RemoteSessionRecorder:
                     "action": "start_session",
                     "session_id": self.session_id,
                     "participant_id": self.participant_id,
-                    "curriculum": self.curriculum.value,
                 },
             )
         elif self.leaderboard_name is None:
@@ -314,11 +324,24 @@ class RemoteSessionRecorder:
                 self.alias_status = ""
             elif self._task_kind == "start":
                 self.session_number = int(result["session_number"])
+                try:
+                    assigned_curriculum = CurriculumMode(result["curriculum"])
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise RuntimeError(
+                        "Data service returned an invalid curriculum allocation"
+                    ) from exc
+                if assigned_curriculum not in BALANCED_CURRICULA:
+                    raise RuntimeError(
+                        "Data service returned an invalid curriculum allocation"
+                    )
+                self.curriculum = assigned_curriculum
+                self.assigned_curriculum = assigned_curriculum
                 self._session_started = True
                 self._read_alias_offer(result)
                 self.alias_status = ""
                 for row in self._pending:
                     row["session_number"] = self.session_number
+                    row["curriculum"] = self.curriculum.value
                 self._persist_pending()
             elif self._task_kind == "alias":
                 if result.get("claimed") is True:

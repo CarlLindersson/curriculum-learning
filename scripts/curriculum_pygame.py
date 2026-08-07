@@ -753,6 +753,16 @@ class CurriculumGame:
         remote_ranking = getattr(self.recorder, "ranking", None)
         if remote_ranking is not None:
             self.ranking = remote_ranking
+        assigned_curriculum = getattr(self.recorder, "assigned_curriculum", None)
+        if assigned_curriculum is not None:
+            mode = (
+                assigned_curriculum
+                if isinstance(assigned_curriculum, CurriculumMode)
+                else _normalise_curriculum_mode(str(assigned_curriculum))
+            )
+            if self.config.mode is not mode:
+                self.config = replace(self.config, mode=mode)
+                self.scheduler = CurriculumScheduler(self.config, self.rng)
         remote_name = getattr(self.recorder, "leaderboard_name", None)
         if remote_name and self.anonymous_participant_id is not None:
             self.leaderboard_name = remote_name

@@ -17,12 +17,7 @@ const SHAPES = new Set([
   "hexagon",
 ]);
 const SIZES = new Set(["small", "large"]);
-const CURRICULA = new Set([
-  "interleaved",
-  "blocked",
-  "progressively_interleaved",
-  "progressively_blocked",
-]);
+const BALANCED_CURRICULA = new Set(["blocked", "progressively_interleaved"]);
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL");
 const secretKeys = JSON.parse(Deno.env.get("SUPABASE_SECRET_KEYS") ?? "{}");
@@ -229,15 +224,23 @@ Deno.serve(async (request: Request) => {
 
     if (action === "start_session") {
       const participantId = requiredString(body.participant_id, "participant_id", 40);
-      const curriculum = requiredString(body.curriculum, "curriculum");
       if (!PARTICIPANT_RE.test(participantId)) fail("Invalid participant_id");
-      if (!CURRICULA.has(curriculum)) fail("Invalid curriculum");
-      const { data, error } = await db.rpc("start_curriculum_session", {
+      if (body.curriculum !== undefined) {
+        fail("This game page is out of date; refresh the page before continuing");
+      }
+      const { data, error } = await db.rpc("start_balanced_curriculum_session", {
         p_session_id: sessionId,
         p_participant_id: participantId,
-        p_curriculum: curriculum,
       });
       if (error) throw error;
+      const allocation = Array.isArray(data) ? data[0] : data;
+      const sessionNumber = requiredInteger(
+        allocation?.session_number,
+        "session_number",
+        1,
+      );
+      const curriculum = requiredString(allocation?.curriculum, "curriculum");
+      if (!BALANCED_CURRICULA.has(curriculum)) fail("Invalid allocated curriculum");
       const { data: aliases, error: aliasError } = await db.rpc(
         "get_curriculum_alias_options",
         { p_participant_id: participantId },
@@ -245,7 +248,8 @@ Deno.serve(async (request: Request) => {
       if (aliasError) throw aliasError;
       return json(request, 200, {
         ok: true,
-        session_number: data,
+        session_number: sessionNumber,
+        curriculum,
         ...aliasOffer(aliases),
       });
     }
