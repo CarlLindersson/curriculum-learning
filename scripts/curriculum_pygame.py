@@ -688,6 +688,7 @@ class CurriculumGame:
         self.is_testing = False
         self.test_trial_count = 0
         self.score = 0
+        self.test_score = 0
         self.selected_option: int | None = None
         self.last_response_correct = False
         self.timed_out = False
@@ -973,6 +974,8 @@ class CurriculumGame:
         self.timed_out = option is None
         if is_correct:
             self.score += 1
+            if self.is_testing:
+                self.test_score += 1
         phase = "test" if self.is_testing else "training"
         curriculum_phase = "test" if self.is_testing else self.scheduler.current_phase
         trial_number = self.scheduler.trial_count + self.test_trial_count + 1
@@ -1005,7 +1008,7 @@ class CurriculumGame:
 
     def _complete_game(self) -> None:
         if not self._summary_saved and self.recorder is not None:
-            ranking = self.recorder.finish(self.score)
+            ranking = self.recorder.finish(self.test_score)
             if ranking is not None:
                 self.ranking = ranking
             self._summary_saved = True
@@ -1043,6 +1046,7 @@ class CurriculumGame:
         self.is_testing = False
         self.test_trial_count = 0
         self.score = 0
+        self.test_score = 0
         self.ranking = None
         self.timed_out = False
         self._summary_saved = False
@@ -1476,7 +1480,13 @@ class CurriculumGame:
                 self.TEXT,
                 310,
             )
-        _centred_text(surface, fonts["heading"], f"Your score: {self.score}", self.SUCCESS, 365)
+        _centred_text(
+            surface,
+            fonts["heading"],
+            f"Your test score: {self.test_score}",
+            self.SUCCESS,
+            365,
+        )
         is_remote = self.recorder is not None and hasattr(self.recorder, "is_synced")
         sync_error = getattr(self.recorder, "sync_error", "") if self.recorder else ""
         if self.ranking is not None:
